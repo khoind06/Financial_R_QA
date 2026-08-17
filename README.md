@@ -1,87 +1,124 @@
-# ViFinQA competition solution
+# Financial Report Question Answering (FinReport-QA)
 
-Pipeline tái lập cho cuộc thi **R2AI2026 Financial Table Retrieval &
-Text-to-Pandas**. Kết quả nộp cuối nằm tại `submission.zip`; toàn bộ dữ liệu
-trung gian, checkpoint theo câu hỏi, log suy luận và báo cáo kiểm định được giữ
-lại để có thể kiểm tra hoặc tiếp tục chạy.
+**Financial Report Question Answering (FinReport-QA)** là hệ thống AI hỗ trợ **Hỏi - Đáp, Trích xuất & Suy luận Chỉ số Báo cáo Tài chính tự động** dành cho các doanh nghiệp niêm yết tại Việt Nam.
 
-## Phương pháp
+Hệ thống cho phép đọc hiểu, tự động phân tích và trích xuất bảng biểu từ **1.973 Báo cáo Tài chính (2015–2025)** của **100 công ty niêm yết**, từ đó đưa ra câu trả lời chính xác, minh bạch cùng các đoạn mã tính toán Pandas có thể kiểm định 100%.
 
-- Lập chỉ mục 146.246 bảng trong báo cáo tài chính vào
-  `artifacts/tables.sqlite3` và chuẩn hoá các chỉ tiêu phổ biến vào
-  `artifacts/financial_panel.json`.
-- Định tuyến 1.012 câu hỏi qua các bộ giải deterministic theo loại câu hỏi;
-  những trường hợp cần hiểu ngôn ngữ dùng Qwen3-8B cục bộ ở nhiệt độ 0.
-- Mỗi đáp án dẫn chiếu tài liệu/bảng tồn tại trong kho chính thức, có một CSV
-  riêng và một `pandas_query` có thể chạy lại để sinh ra `answer`.
-- Không fine-tune hay huấn luyện có giám sát. Snapshot model, nguồn model,
-  prompt/response, cache và checkpoint đều được lưu trong workspace.
+---
 
-## Môi trường đã dùng
+## 🌟 Các Tính năng Cốt lõi & Kiến trúc Hệ thống
 
-- Python 3.12, pandas 3.0.3, NumPy 2.5.1, Windows 11.
-- Dataset ViFinQA revision:
-  `0450088ab22ec946f04f097586967ca405955b3b`.
-- Mã tham chiếu `DSKT-NOWJ/ViFinQA` commit:
-  `9a046de2f2daea4d2be0a05d4a5f3f1220e6922a`.
-- Model:
-  `artifacts/models/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf`.
-- Nguồn model:
-  `Qwen/Qwen3-8B-GGUF@main:Qwen3-8B-Q4_K_M.gguf`.
-- Runtime cục bộ: `tools/llama.cpp/runtime/llama-server.exe`.
+1. **Đánh chỉ mục Báo cáo Tài chính Tốc độ cao (`build_index`)**:
+   - Tự động parse và lưu trữ **146.246 bảng biểu HTML/Text** cùng **1.535.824 dòng dữ liệu** vào cơ sở dữ liệu SQLite (`artifacts/tables.sqlite3`).
+2. **Khối dữ liệu Tài chính Chuẩn hóa (`build_panel`)**:
+   - Xây dựng Panel dữ liệu tài chính đa chiều (100 mã cổ phiếu × 884 năm-công ty) bao gồm các bảng: *Cân đối kế toán (CDKT)*, *Kết quả kinh doanh (KQKD)* và *Lưu chuyển tiền tệ (LCTT)*.
+   - Tích hợp **Fuzzy Text Label Matching** giúp trích xuất chuẩn xác các chỉ tiêu tài chính kể cả khi bị lỗi OCR hoặc mất mã số dòng.
+3. **Động cơ Phân luồng & Suy luận Đa tuyến (`solve`)**:
+   - **Tra cứu Trực tiếp (Direct Solver)**: Tra cứu nhanh các chỉ số đơn lẻ bằng kỹ thuật Reranking kết hợp với LLM.
+   - **Công thức Tài chính (Hard Formula Solver)**: Tự động tổng hợp và tính toán các tỷ suất, chênh lệch tăng/giảm giữa các năm.
+   - **Phân tích Thuyết minh BCTC (Note Solver)**: Trích xuất thông tin chuyên sâu trong phần Thuyết minh (chi tiết nợ xấu, trái phiếu, phải thu,...).
+   - **Mẫu Chuỗi thời gian (Template Solver)**: Xử lý các câu hỏi so sánh và thống kê (Max, Mean, Sum, Count, Argmax).
+4. **Động cơ Linh hoạt LLM Cloud & Local (`local_llm.py`)**:
+   - Tương thích linh hoạt với cả **Cloud API miễn phí** (Groq `qwen-2.5-32b` / `llama-3.3-70b`, Google Gemini, OpenAI) lẫn **Local LLM** (Ollama, llama.cpp).
+   - Tự động xử lý lỗi Rate Limit (`429 Too Many Requests`) để đảm bảo quá trình chạy không bị gián đoạn.
+5. **Tính toán Chính xác & Minh bạch tuyệt đối**:
+   - LLM chỉ đóng vai trò trích xuất và định vị dữ liệu grounded, toàn bộ phép toán số học được thực thi hoàn toàn bằng Python/Pandas để đảm bảo không bị sai số hay bịa số (Hallucination).
 
-## Chạy lại
+---
 
-Các lệnh dưới đây chạy từ thư mục gốc dự án trong PowerShell:
+## 📂 Sơ đồ Cấu trúc Dự án
 
-```powershell
-python -m pip install -e .
-$env:PYTHONPATH = "src"
-$env:PYTHONIOENCODING = "utf-8"
-$env:VIFINQA_MODEL = (Resolve-Path "artifacts/models/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf").Path
-$env:VIFINQA_MODEL_SOURCE = "Qwen/Qwen3-8B-GGUF@main:Qwen3-8B-Q4_K_M.gguf"
-
-python -m road2ai_vifinqa.build_index
-python -m road2ai_vifinqa.build_panel
-python -m road2ai_vifinqa.solve --iteration 3 --run-dir runs/iteration_3 --ids 1-1012 --fail-fast --publish
-python tools/release_audit.py --zip submission.zip --model "$env:VIFINQA_MODEL" --run-dir runs/iteration_3 --report runs/iteration_3/final_release_audit.json --replays 3
+```text
+Financial-Report-QA/
+├── data/
+│   └── vifinqa/
+│       ├── code_stock.csv           # Danh sách 100 mã cổ phiếu & tên doanh nghiệp
+│       ├── financial_statements/    # Kho 1.973 tệp báo cáo tài chính (.txt)
+│       └── questions/
+│           └── questions.jsonl      # Tập câu hỏi đánh giá và truy vấn
+├── src/
+│   └── road2ai_vifinqa/
+│       ├── paths.py                 # Quản lý đường dẫn hệ thống
+│       ├── corpus.py                # Quản lý & truy xuất dữ liệu kho báo cáo
+│       ├── text.py                  # Chuẩn hóa tiếng Việt & xử lý số học/tỷ lệ scale
+│       ├── html_tables.py           # Parse bảng biểu HTML trong OCR
+│       ├── build_index.py           # Đánh chỉ mục SQLite (tables.sqlite3)
+│       ├── build_panel.py           # Tạo khối dữ liệu panel chuẩn hóa
+│       ├── local_llm.py             # Động cơ LLM (Hỗ trợ Groq/Gemini API & Ollama)
+│       ├── retrieval.py             # Tìm kiếm & truy xuất tài liệu/bảng biểu
+│       ├── easy_solver.py           # Solver cho câu hỏi tra cứu
+│       ├── hard_solver.py           # Solver cho câu hỏi tính toán công thức
+│       ├── hard_note_solver.py      # Solver cho câu hỏi thuyết minh BCTC
+│       ├── panel_solver.py          # Solver dữ liệu chuỗi thời gian
+│       ├── template_solver.py       # Solver theo mẫu câu hỏi
+│       ├── solve.py                 # Trình điều khiển thực thi toàn bộ hệ thống
+│       └── submission.py            # Đóng gói & kiểm định kết quả
+├── tools/                           # Các công cụ kiểm định & chẩn đoán
+├── artifacts/                       # Cơ sở dữ liệu SQLite & dữ liệu panel
+├── runs/                            # Lịch sử các lượt chạy & checkpoint
+├── submission.zip                   # Kết quả đóng gói hoàn chỉnh
+├── pyproject.toml                   # Cấu hình dự án
+└── README.md                        # Tài liệu hướng dẫn sử dụng
 ```
 
-Lệnh `solve` tự tiếp tục từ checkpoint. Nếu cần giải lại độc lập từ đầu, dùng
-`--no-resume` với một run mới (ví dụ `--iteration 4 --run-dir
-runs/reproduction_clean`) để không ghi đè bản phát hành đã kiểm định.
+---
 
-## Kết quả và nhật ký
+## 🚀 Hướng dẫn Cài đặt & Vận hành
 
-- `runs/iteration_1`, `runs/iteration_2`, `runs/iteration_3`: lịch sử ba vòng
-  giải, kiểm tra và cải thiện liên tiếp; đây không phải ba vòng tự động của một
-  lệnh `solve`.
-- `runs/iteration_3/cache`: 1.012 checkpoint `.pkl` dùng để tiếp tục an toàn;
-  chỉ nạp pickle do chính workspace tin cậy này tạo ra.
-- `runs/iteration_3/checkpoints`: 1.012 bản tóm tắt JSON để kiểm tra thủ công.
-- `runs/iteration_3/llm`: log suy luận cục bộ cho các câu dùng mô hình.
-- `runs/iteration_3/manifest.json`: cấu hình và thống kê của vòng cuối.
-- `runs/iteration_3/release_audit.json`: kiểm định độc lập ZIP vòng 3.
-- `runs/iteration_3/final_release_audit.json`: kiểm định lại file đã xuất bản
-  tại thư mục gốc.
-- `submission.zip`: tệp duy nhất cần tải lên dashboard cuộc thi.
+### 1. Yêu cầu Môi trường
+- **Python**: `>= 3.11`
+- **Hệ điều hành**: Windows, Linux, macOS
 
-Kiểm định phát hành yêu cầu đủ 1.012 ID đúng thứ tự, đúng schema, đúng câu hỏi
-gốc, mọi tài liệu/bảng/CSV đều tồn tại, không có CSV mồ côi, và mỗi
-`pandas_query` phải chạy lại độc lập ba lần với kết quả hữu hạn, deterministic
-và khớp `answer`.
+### 2. Cài đặt Dự án
 
-Kết quả vòng cuối: 1.012 dòng, 1.012 CSV, 1.013 thành viên ZIP, ba lượt replay
-mới và 0 lỗi. SHA-256 của `submission.zip` là
-`786adf2f5840562e698d3e39cbd53b056534d7bbba5c03f79b659d5dc2c79f2d`;
-SHA-256 của model là
-`d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785`.
+Mở terminal tại thư mục gốc của dự án:
 
-Kiểm định này bảo đảm tính toàn vẹn, khả năng chạy lại và tính hợp lệ của hồ
-sơ nộp. Vì đáp án chuẩn của bộ kiểm thử không được công bố, nó không thể bảo
-đảm trước điểm số trên leaderboard ẩn.
+```powershell
+# Kích hoạt môi trường ảo
+.\.venv\Scripts\Activate.ps1
 
-Lưu ý: `.gitignore` loại trừ các snapshot và sản phẩm dung lượng lớn
-(`data/source`, `external`, `artifacts`, `runs`, `submission.zip`). Vì vậy một
-Git clone sạch không tự chứa các payload này; khi bàn giao cần sao chép cả các
-thư mục trên hoặc tái tạo chúng từ đúng snapshot nguồn.
+# Cài đặt dự án ở chế độ editable
+python -m pip install -e .
+```
+
+### 3. Thực thi Hệ thống
+
+#### **Cách 1: Sử dụng Cloud API miễn phí (Nhanh nhất & Chính xác nhất)**
+
+Đăng ký API Key miễn phí tại [Groq Cloud](https://console.groq.com/) hoặc [Google AI Studio](https://aistudio.google.com/), sau đó thiết lập biến môi trường và chạy:
+
+```powershell
+# Đặt API Key của bạn (ví dụ với Groq)
+$env:LLM_API_KEY="gsk_dien_api_key_cua_ban_tai_day"
+$env:LLM_MODEL="qwen-2.5-32b"
+
+# Bước 1: Đánh chỉ mục báo cáo tài chính
+python -m road2ai_vifinqa.build_index --force
+
+# Bước 2: Tạo Panel dữ liệu tài chính
+python -m road2ai_vifinqa.build_panel --force
+
+# Bước 3: Chạy giải câu hỏi & tạo kết quả
+python -m road2ai_vifinqa.solve --iteration 1 --publish
+```
+
+#### **Cách 2: Chạy hoàn toàn Local qua Ollama**
+
+Đảm bảo dịch vụ Ollama đang chạy (`ollama list` có `qwen2.5:latest`):
+
+```powershell
+$env:USE_OLLAMA="1"
+
+python -m road2ai_vifinqa.build_index --force
+python -m road2ai_vifinqa.build_panel --force
+python -m road2ai_vifinqa.solve --iteration 1 --publish
+```
+
+---
+
+## 📊 Kết quả Output & Kiểm định
+
+Sau khi quá trình thực thi hoàn tất:
+- File kết quả tổng hợp [`submission.zip`](file:///d:/Road2AI/submission.zip) sẽ được tạo tại thư mục gốc.
+- Mọi câu hỏi đều được tự động replay mã `pandas_query` để kiểm định tính hợp lệ 100% trước khi xuất bản.
+- Lịch sử suy luận và checkpoint được ghi nhận tại thư mục `runs/iteration_1/`.

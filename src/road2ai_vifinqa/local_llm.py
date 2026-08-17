@@ -14,15 +14,31 @@ from pathlib import Path
 from .paths import ARTIFACT_ROOT, PROJECT_ROOT
 
 
+# -------------------------------------------------------------------------
+# Cloud API Key Configuration (e.g. Groq, Gemini, OpenAI, DeepInfra)
+# You can set LLM_API_KEY in your environment, or paste your API key below:
+# GROQ Free Key: https://console.groq.com/
+# Gemini Free Key: https://aistudio.google.com/
+# -------------------------------------------------------------------------
+API_KEY = os.environ.get("LLM_API_KEY", os.environ.get("GROQ_API_KEY", os.environ.get("GEMINI_API_KEY", "")))
+
 RUNTIME = PROJECT_ROOT / "tools" / "llama.cpp" / "runtime" / "llama-server.exe"
 MODEL = Path(
     os.environ.get(
         "VIFINQA_MODEL",
         str(ARTIFACT_ROOT / "models" / "Qwen3-4B-GGUF" / "Qwen3-4B-Q4_K_M.gguf"),
     )
-) if not os.getenv("USE_OLLAMA") else None
-MODEL_SOURCE = os.environ.get("VIFINQA_MODEL_SOURCE", "qwen2.5:latest" if os.getenv("USE_OLLAMA") else MODEL.name)
-DEFAULT_URL = "http://127.0.0.1:11434" if os.getenv("USE_OLLAMA") else "http://127.0.0.1:8087"
+) if not (os.getenv("USE_OLLAMA") or API_KEY) else None
+
+if API_KEY:
+    DEFAULT_URL = os.environ.get("LLM_BASE_URL", "https://api.groq.com/openai/v1")
+    MODEL_SOURCE = os.environ.get("LLM_MODEL", os.environ.get("VIFINQA_MODEL_SOURCE", "qwen-2.5-32b"))
+elif os.getenv("USE_OLLAMA"):
+    DEFAULT_URL = os.environ.get("LLM_BASE_URL", "http://127.0.0.1:11434")
+    MODEL_SOURCE = os.environ.get("VIFINQA_MODEL_SOURCE", "qwen2.5:latest")
+else:
+    DEFAULT_URL = os.environ.get("LLM_BASE_URL", "http://127.0.0.1:8087")
+    MODEL_SOURCE = os.environ.get("VIFINQA_MODEL_SOURCE", MODEL.name if MODEL else "qwen2.5:latest")
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,26 +132,42 @@ def chat(
         }
     ).encode("utf-8")
     # Determine the correct endpoint based on whether Ollama is used
-    endpoint = f"{base_url}/api/chat" if os.getenv("USE_OLLAMA") else f"{base_url}/v1/chat/completions"
+    endpoint = f"{base_url}/api/chat" if (os.getenv("USE_OLLAMA") and not API_KEY) else f"{base_url.rstrip('/')}/v1/chat/completions" if not base_url.endswith("/v1") else f"{base_url.rstrip('/')}/chat/completions"
+    if not endpoint.startswith("http"):
+        endpoint = f"{base_url}/chat/completions"
+
+    headers = {"Content-Type": "application/json"}
+    if API_KEY:
+        headers["Authorization"] = f"Bearer {API_KEY}"
+
     request = urllib.request.Request(
         endpoint,
         data=payload,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     started = time.time()
-    with urllib.request.urlopen(request, timeout=600) as response:
-        result = json.loads(response.read().decode("utf-8"))
+    result = None
+    for attempt in range(4):
+        try:
+            with urllib.request.urlopen(request, timeout=600) as response:
+                result = json.loads(response.read().decode("utf-8"))
+            break
+        except urllib.error.HTTPError as err:
+            if err.code in (429, 503) and attempt < 3:
+                time.sleep(2.0 * (attempt + 1))
+                continue
+            raise
+
+    if result is None:
+        raise RuntimeError("No response from LLM server")
+
     usage = result.get("usage", {})
-    # Ollama returns a different JSON structure (no 'choices'), e.g.,
-    # {"model":..., "message": {"role": "assistant", "content": "..."}, ...}
-    if "choices" in result:
-        # Original OpenAI‑compatible response
+    if "choices" in result and result["choices"]:
         content = result["choices"][0]["message"]["content"]
     elif "message" in result and isinstance(result["message"], dict):
         content = result["message"]["content"]
     else:
-        # Fallback: look for a top‑level 'content' field
         content = result.get("content", "")
     return Completion(
         content=content,

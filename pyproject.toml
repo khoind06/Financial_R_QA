@@ -3,9 +3,9 @@ requires = ["setuptools>=75"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "road2ai-vifinqa"
-version = "0.1.0"
-description = "Reproducible ViFinQA competition pipeline"
+name = "financial-report-qa"
+version = "1.0.0"
+description = "Financial Report Question Answering System for Vietnamese Financial Statements"
 requires-python = ">=3.11"
 dependencies = [
   "beautifulsoup4>=4.12",

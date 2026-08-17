@@ -29,6 +29,47 @@ def _find_code(row: list[str]) -> tuple[int, str] | None:
             return idx, value
     return None
 
+LABEL_KEY_MAP = {
+    "kqkd": [
+        ("loi nhuan sau thue tndn", "60"),
+        ("loi nhuan sau thue", "60"),
+        ("tong loi nhuan ke toan truoc thue", "50"),
+        ("loi nhuan truoc thue", "50"),
+        ("doanh thu thuan ve ban hang", "10"),
+        ("doanh thu thuan", "10"),
+        ("loi nhuan gop", "20"),
+        ("gia von hang ban", "11"),
+        ("chi phi tai chinh", "22"),
+        ("chi phi lai vay", "23"),
+        ("chi phi ban hang", "25"),
+        ("chi phi quan ly", "26"),
+        ("doanh thu ban hang", "01"),
+    ],
+    "cdkt": [
+        ("tong cong tai san", "270"),
+        ("tong tai san", "270"),
+        ("tong cong nguon von", "440"),
+        ("von chu so huu", "400"),
+        ("no phai tra", "300"),
+        ("tai san ngan han", "100"),
+        ("tai san dai han", "200"),
+        ("tien va cac khoan tương duong tien", "110"),
+        ("hang ton kho", "140"),
+        ("no ngan han", "310"),
+        ("no dai han", "330"),
+    ],
+}
+
+
+def _infer_code_from_label(row: list[str], kind: str) -> tuple[int, str] | None:
+    if kind not in LABEL_KEY_MAP:
+        return None
+    row_text = fold_text(" ".join(row[:2]))
+    for phrase, code in LABEL_KEY_MAP[kind]:
+        if phrase in row_text:
+            return 0, code
+    return None
+
 
 def _label(row: list[str], code_idx: int) -> str:
     candidates: list[str] = []
@@ -107,7 +148,7 @@ def build_panel(*, force: bool = False) -> dict[str, object]:
             year = str(item["report_year"])
             bucket = panel.setdefault(ticker, {}).setdefault(year, {})
             for row_idx, row in enumerate(rows):
-                found = _find_code(row)
+                found = _find_code(row) or _infer_code_from_label(row, kind)
                 if found is None:
                     continue
                 code_idx, code = found
