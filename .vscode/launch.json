@@ -1,0 +1,58 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "🌐 Run Streamlit Chatbot Demo",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "streamlit",
+      "args": [
+        "run",
+        "${workspaceFolder}/demo.py",
+        "--server.port=8501"
+      ],
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src"
+      },
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "⚙️ Step 1: Build Index (tables.sqlite3)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "road2ai_vifinqa.build_index",
+      "args": ["--force"],
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src"
+      },
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "📊 Step 2: Build Panel (financial_panel.json)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "road2ai_vifinqa.build_panel",
+      "args": ["--force"],
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src"
+      },
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "🚀 Step 3: Solve All Questions & Generate Submission",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "road2ai_vifinqa.solve",
+      "args": [
+        "--iteration", "1",
+        "--publish"
+      ],
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src",
+        "LLM_API_KEY": ""
+      },
+      "console": "integratedTerminal"
+    }
+  ]
+}
