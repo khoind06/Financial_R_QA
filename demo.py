@@ -1,5 +1,5 @@
 """
-Financial Report QA - Conversational AI Assistant (Chatbot UI)
+Financial Report QA - Smart Conversational AI Assistant (Full Pipeline Demo)
 """
 from __future__ import annotations
 
@@ -24,13 +24,11 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    /* Global Styles */
     .stApp {
         max-width: 1200px;
         margin: 0 auto;
     }
     
-    /* Header Container */
     .chat-header {
         text-align: center;
         padding: 1.5rem 0 1rem 0;
@@ -55,7 +53,6 @@ st.markdown("""
         font-size: 0.95rem;
     }
 
-    /* Badge styles */
     .metric-badge {
         display: inline-block;
         padding: 4px 12px;
@@ -66,6 +63,7 @@ st.markdown("""
         color: #38bdf8;
         border: 1px solid #334155;
         margin-right: 6px;
+        margin-bottom: 6px;
     }
 
     .answer-card {
@@ -88,7 +86,7 @@ st.markdown("""
 # ---------------------------------------------------------------------------
 # Load Resources (Cached)
 # ---------------------------------------------------------------------------
-@st.cache_resource(show_spinner="📂 Đang khởi tạo hệ thống RAG & Data Panel...")
+@st.cache_resource(show_spinner="📂 Đang khởi tạo hệ thống RAG & Full Pipeline...")
 def load_resources():
     sys.path.insert(0, str(Path(__file__).resolve().parents[0] / "src"))
     from road2ai_vifinqa.corpus import Corpus
@@ -118,6 +116,7 @@ except Exception as e:
     load_error = str(e)
 
 sample_questions = load_sample_questions()
+question_by_text = {q["question"].strip(): q["id"] for q in sample_questions}
 
 # ---------------------------------------------------------------------------
 # Sidebar Settings
@@ -205,9 +204,9 @@ st.markdown("**💡 Thử hỏi các câu hỏi mẫu:**")
 chip_cols = st.columns(4)
 
 suggested_queries = [
-    "Lợi nhuận sau thuế của VNM năm 2023 là bao nhiêu tỷ đồng?",
-    "Doanh thu thuần của FPT năm 2024 là bao nhiêu tỷ đồng?",
-    "Tổng tài sản của HPG cuối năm 2022 là bao nhiêu tỷ đồng?",
+    "Lãi tiền gửi năm 2018 của công ty mẹ Vietjet (VJC) là bao nhiêu triệu đồng?",
+    "Số dư cho vay khách hàng ngành Thương mại của ACB cuối năm 2022 là bao nhiêu triệu đồng?",
+    "Doanh thu thuần của FPT năm 2023 là bao nhiêu tỷ đồng?",
     "🎲 Lấy câu hỏi ngẫu nhiên từ Dataset",
 ]
 
@@ -230,7 +229,6 @@ for msg in st.session_state.messages:
         if isinstance(msg["content"], str):
             st.markdown(msg["content"])
         else:
-            # Rich render for structured assistant responses
             data = msg["content"]
             st.markdown(data.get("text_summary", ""))
 
@@ -258,88 +256,104 @@ for msg in st.session_state.messages:
                     st.code(data["pandas_query"], language="python")
 
             if data.get("elapsed"):
-                st.caption(f"⚡ Thời gian phản hồi: `{data['elapsed']:.2f}s` | Phương pháp: `{data.get('method', 'Auto-routing')}`")
+                st.caption(f"⚡ Thời gian phản hồi: `{data['elapsed']:.2f}s` | Tuyến xử lý: `{data.get('route', 'Auto')}` | Phương pháp: `{data.get('method', 'Full Pipeline')}`")
+
+# ---------------------------------------------------------------------------
+# Smart Multi-Route Solver Logic (Matches solve.py 100%)
+# ---------------------------------------------------------------------------
+def run_smart_pipeline(question: str):
+    from road2ai_vifinqa.solve import route_for_id
+    from road2ai_vifinqa.pipeline import (
+        solve_easy_submission,
+        solve_hard_submission,
+        solve_note_submission,
+        solve_template_submission,
+    )
+
+    q_clean = question.strip()
+    qid = question_by_text.get(q_clean, 9999)
+
+    # 1. Known Dataset Question -> Use exact route
+    if qid != 9999:
+        route = route_for_id(qid)
+        if route == "direct":
+            return solve_easy_submission(qid, q_clean, corpus, max_attempts=3, log_path=None), route
+        elif route == "hard":
+            return solve_hard_submission(qid, q_clean, panel), route
+        elif route == "note":
+            return solve_note_submission(qid, q_clean, corpus, max_attempts=3, log_path=None), route
+        elif route == "template":
+            return solve_template_submission(qid, q_clean, template_solver), route
+
+    # 2. Custom User Question -> Smart Dynamic Fallback Cascade
+    # Priority: Template -> Hard Formula -> Note -> Easy LLM
+    try:
+        sol = solve_template_submission(9999, q_clean, template_solver)
+        return sol, "template"
+    except Exception:
+        pass
+
+    try:
+        sol = solve_hard_submission(9999, q_clean, panel)
+        return sol, "hard"
+    except Exception:
+        pass
+
+    try:
+        sol = solve_note_submission(9999, q_clean, corpus, max_attempts=3, log_path=None)
+        return sol, "note"
+    except Exception:
+        pass
+
+    # Final fallback to Direct / Easy LLM solver
+    sol = solve_easy_submission(9999, q_clean, corpus, max_attempts=3, log_path=None)
+    return sol, "direct"
 
 # ---------------------------------------------------------------------------
 # Chat Input & Execution
 # ---------------------------------------------------------------------------
-user_input = st.chat_input("Nhập câu hỏi tài chính tại đây... (Ví dụ: Chi phí lãi vay của HPG năm 2021)")
+user_input = st.chat_input("Nhập câu hỏi tài chính tại đây...")
 
 if prompt_to_trigger:
     user_input = prompt_to_trigger
 
 if user_input:
-    # 1. Add user message
     st.session_state.messages.append({"role": "user", "content": user_input})
     with st.chat_message("user", avatar="🧑‍💻"):
         st.markdown(user_input)
 
-    # 2. Generate assistant response
     with st.chat_message("assistant", avatar="🤖"):
         status_placeholder = st.empty()
-        status_placeholder.markdown("⏳ *Đang tìm kiếm tài liệu BCTC & suy luận...*")
-
-        from road2ai_vifinqa.pipeline import (
-            solve_easy_submission,
-            solve_template_submission,
-        )
+        status_placeholder.markdown("⏳ *Đang định tuyến & truy xuất dữ liệu BCTC...*")
 
         t0 = time.time()
         question = user_input.strip()
 
-        # Step 1: Infer metadata
         tickers = corpus.infer_tickers(question)
-        years = corpus.infer_years(question)
-        docs = corpus.documents_for_question(question, include_prior=True)
 
-        solution = None
-        method_used = ""
-        error_msg = ""
-
-        # Step 2: Solver attempt (Template -> Easy LLM)
         try:
-            solution = solve_template_submission(9999, question, template_solver)
-            method_used = "template"
-        except Exception:
-            pass
+            solution, route_used = run_smart_pipeline(question)
+            elapsed = time.time() - t0
+            status_placeholder.empty()
 
-        if solution is None:
-            try:
-                solution = solve_easy_submission(
-                    9999,
-                    question,
-                    corpus,
-                    max_attempts=3,
-                    log_path=None,
-                )
-                method_used = "llm"
-            except Exception as exc:
-                error_msg = str(exc)
-
-        elapsed = time.time() - t0
-        status_placeholder.empty()
-
-        if solution is not None:
-            # Build structured response payload
             docs_list = list(solution.relevant_docs)
             evidence_list = []
             if solution.evidence:
                 for ev in solution.evidence:
-                    # Convert dataframe to dict list for serialization
                     df_dict = ev.frame.to_dict(orient="records")
                     evidence_list.append({"variable": ev.variable, "frame": df_dict})
 
             res_payload = {
-                "text_summary": f"Dựa trên phân tích báo cáo tài chính của doanh nghiệp **{', '.join(tickers) if tickers else 'niêm yết'}**:",
+                "text_summary": f"Dựa trên phân tích báo cáo tài chính của **{', '.join(tickers) if tickers else 'doanh nghiệp niêm yết'}**:",
                 "answer": solution.answer,
                 "docs": docs_list,
                 "evidence": evidence_list,
                 "pandas_query": solution.pandas_query,
                 "method": solution.method,
+                "route": route_used,
                 "elapsed": elapsed,
             }
 
-            # Render immediately
             st.markdown(res_payload["text_summary"])
             st.markdown(f"""
             <div class="answer-card">
@@ -363,11 +377,13 @@ if user_input:
                 with st.expander("🔢 Mã lệnh Pandas tính toán", expanded=False):
                     st.code(solution.pandas_query, language="python")
 
-            st.caption(f"⚡ Thời gian phản hồi: `{elapsed:.2f}s` | Phương pháp: `{solution.method}`")
+            st.caption(f"⚡ Thời gian phản hồi: `{elapsed:.2f}s` | Tuyến xử lý: `{route_used}` | Phương pháp: `{solution.method}`")
 
-            # Save to history
             st.session_state.messages.append({"role": "assistant", "content": res_payload})
-        else:
+
+        except Exception as exc:
+            status_placeholder.empty()
+            error_msg = str(exc)
             error_content = f"❌ Không thể tìm thấy hoặc tính toán được đáp án cho câu hỏi này.\n\n*Chi tiết:* `{error_msg}`"
             st.error(error_content)
             st.session_state.messages.append({"role": "assistant", "content": error_content})
