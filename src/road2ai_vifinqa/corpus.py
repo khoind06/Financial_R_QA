@@ -89,7 +89,7 @@ def load_questions() -> list[dict[str, object]]:
 class Corpus:
     def __init__(self, path: Path = INDEX_PATH) -> None:
         self.path = path
-        self.conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+        self.conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self._documents = [DocumentRef(**dict(row)) for row in self.conn.execute("SELECT * FROM documents")]
         self._by_ticker: dict[str, list[DocumentRef]] = {}
