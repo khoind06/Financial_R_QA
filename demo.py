@@ -10,6 +10,7 @@ import sys
 import time
 from pathlib import Path
 
+import pandas as pd
 import streamlit as st
 
 # ---------------------------------------------------------------------------
@@ -205,7 +206,7 @@ chip_cols = st.columns(4)
 
 suggested_queries = [
     "Lãi tiền gửi năm 2018 của công ty mẹ Vietjet (VJC) là bao nhiêu triệu đồng?",
-    "Số dư cho vay khách hàng ngành Thương mại của ACB cuối năm 2022 là bao nhiêu triệu đồng?",
+    "Bảng xếp hạng 10 công ty có doanh thu cao nhất năm 2023",
     "Doanh thu thuần của FPT năm 2023 là bao nhiêu tỷ đồng?",
     "🎲 Lấy câu hỏi ngẫu nhiên từ Dataset",
 ]
@@ -259,6 +260,78 @@ for msg in st.session_state.messages:
                 st.caption(f"⚡ Thời gian phản hồi: `{data['elapsed']:.2f}s` | Tuyến xử lý: `{data.get('route', 'Auto')}` | Phương pháp: `{data.get('method', 'Full Pipeline')}`")
 
 # ---------------------------------------------------------------------------
+# Ranking Query Handler (Top N across 100 companies)
+# ---------------------------------------------------------------------------
+def try_top_ranking_query(question: str):
+    from road2ai_vifinqa.text import fold_text
+    from road2ai_vifinqa.submission import SubmissionSolution, EvidenceFrame
+
+    folded = fold_text(question)
+    ranking_keywords = ["top", "xep hang", "bang xep hang", "danh sach", "cao nhat"]
+    if not any(k in folded for k in ranking_keywords):
+        return None
+
+    years = corpus.infer_years(question)
+    target_year = str(years[0]) if years else "2023"
+
+    metric_key = "kqkd:10"
+    metric_name = "Doanh thu thuần (tỷ đồng)"
+    scale = 1_000_000_000.0
+
+    if any(k in folded for k in ["loi nhuan", "lai"]):
+        metric_key = "kqkd:60"
+        metric_name = "Lợi nhuận sau thuế (tỷ đồng)"
+    elif any(k in folded for k in ["tai san"]):
+        metric_key = "cdkt:270"
+        metric_name = "Tổng tài sản (tỷ đồng)"
+    elif any(k in folded for k in ["von chu so huu"]):
+        metric_key = "cdkt:400"
+        metric_name = "Vốn chủ sở hữu (tỷ đồng)"
+
+    records = []
+    docs = []
+    tables = []
+
+    for ticker, years_data in panel.raw.items():
+        if target_year in years_data and metric_key in years_data[target_year]:
+            cell_info = years_data[target_year][metric_key]
+            val_ty = cell_info["value"] / scale
+            cname = corpus.company_names.get(ticker, ticker)
+            doc_id = cell_info.get("doc_id", f"{ticker}_financial_statements_{target_year}_consolidated")
+            records.append({
+                "Mã CK": ticker,
+                "Tên Doanh Nghiệp": cname,
+                metric_name: round(val_ty, 2),
+                "Báo Cáo": doc_id,
+            })
+            if len(docs) < 5:
+                docs.append(doc_id)
+                tables.append(f"{doc_id}|table_{cell_info.get('table_id', 1)}")
+
+    if not records:
+        return None
+
+    records.sort(key=lambda x: x[metric_name], reverse=True)
+    df_rank = pd.DataFrame(records[:10])
+    df_rank.index = range(1, len(df_rank) + 1)
+    df_rank.index.name = "Thứ Hạng"
+
+    top_val = records[0][metric_name]
+
+    return SubmissionSolution(
+        id=9999,
+        question=question,
+        answer=float(top_val),
+        relevant_docs=tuple(docs),
+        relevant_tables=tuple(tables),
+        evidence=tuple([EvidenceFrame(variable=f"top10_{target_year}", frame=df_rank)]),
+        pandas_query=f"df_panel[year=='{target_year}'].sort_values(by='{metric_key}', ascending=False).head(10)",
+        method=f"panel_top10_ranking:{metric_name}",
+        confidence=0.99,
+    ), "ranking"
+
+
+# ---------------------------------------------------------------------------
 # Smart Multi-Route Solver Logic (Matches solve.py 100%)
 # ---------------------------------------------------------------------------
 def run_smart_pipeline(question: str):
@@ -271,6 +344,12 @@ def run_smart_pipeline(question: str):
     )
 
     q_clean = question.strip()
+
+    # 0. Check Ranking Query across all 100 tickers first
+    ranking_sol = try_top_ranking_query(q_clean)
+    if ranking_sol is not None:
+        return ranking_sol
+
     qid = question_by_text.get(q_clean, 9999)
 
     # 1. Known Dataset Question -> Use exact route
@@ -286,7 +365,6 @@ def run_smart_pipeline(question: str):
             return solve_template_submission(qid, q_clean, template_solver), route
 
     # 2. Custom User Question -> Smart Dynamic Fallback Cascade
-    # Priority: Template -> Hard Formula -> Note -> Easy LLM
     try:
         sol = solve_template_submission(9999, q_clean, template_solver)
         return sol, "template"
@@ -305,7 +383,6 @@ def run_smart_pipeline(question: str):
     except Exception:
         pass
 
-    # Final fallback to Direct / Easy LLM solver
     sol = solve_easy_submission(9999, q_clean, corpus, max_attempts=3, log_path=None)
     return sol, "direct"
 
@@ -344,7 +421,7 @@ if user_input:
                     evidence_list.append({"variable": ev.variable, "frame": df_dict})
 
             res_payload = {
-                "text_summary": f"Dựa trên phân tích báo cáo tài chính của **{', '.join(tickers) if tickers else 'doanh nghiệp niêm yết'}**:",
+                "text_summary": f"Dựa trên phân tích dữ liệu báo cáo tài chính **{', '.join(tickers) if tickers else '100 doanh nghiệp niêm yết'}**:",
                 "answer": solution.answer,
                 "docs": docs_list,
                 "evidence": evidence_list,
@@ -368,7 +445,7 @@ if user_input:
                 st.markdown(badges_html, unsafe_allow_html=True)
 
             if solution.evidence:
-                with st.expander("📋 Xem Bảng Bằng Chứng Dữ Liệu (Evidence Tables)", expanded=False):
+                with st.expander("📋 Xem Bảng Bằng Chứng Dữ Liệu (Evidence Tables)", expanded=True if route_used == "ranking" else False):
                     for ev in solution.evidence:
                         st.caption(f"Biến: `{ev.variable}`")
                         st.dataframe(ev.frame, use_container_width=True)
